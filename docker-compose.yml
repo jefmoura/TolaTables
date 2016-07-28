@@ -12,8 +12,7 @@ nginx:
    links:
       - tola
 mongodb:
-   image: frodenas/mongodb
-   env_file: ./config/mongodb.env.secret
+   image: mongo
    restart: always 
 tola:
    build: .
