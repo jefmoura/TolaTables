@@ -2,10 +2,17 @@
 
 {% load render_table from django_tables2 %}
 
-{% block page_title %}<center> <a href="/silo_edit/{{ silo.id }}">{{ silo.name }}</a> <br /><small><p>{{ silo.description|default:"" }}</p></small></center>{% endblock %}
+{% block page_title %}<center> <a href="/silo_edit/{{ silo.id }}">{{ silo.name }}</a>
+    <br /><small><p>{{ silo.description|default:"" }}</p></small></center>
+{% endblock %}
 
 {% block content %}
-
+    {% if silo.merged_silo_mappings %}
+        <center>
+            Merged from <a href="{% url 'siloDetail' silo.merged_silo_mappings.from_silo.pk %}">{{silo.merged_silo_mappings.from_silo}}</a>
+            and <a href="{% url 'siloDetail' silo.merged_silo_mappings.to_silo.pk %}">{{ silo.merged_silo_mappings.to_silo}}</a>
+        </center>
+    {% endif %}
 
     <hr />
     <a href="#"><h4 data-toggle="collapse" data-target="#table_options" aria-expanded="false" aria-controls="table_options"> Auto Update or Push Your Data</a><br /><small>Perform table level operations.</small></h4>
@@ -135,7 +142,7 @@
         <div class="modal-content">
             <div class="modal-header">
                 <button type="button" class="close" data-dismiss="modal" aria-hidden="true">&times;</button>
-                <h4 class="modal-title">Project Agreements Failed to Post</h4>
+                <h4 class="modal-title">Failed to Post to TolaActivity</h4>
             </div>
             <div class="modal-body" id="failed_project_agreements_modal_body">
             </div>

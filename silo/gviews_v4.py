@@ -147,7 +147,7 @@ def import_from_gsheet_helper(user, silo_id, silo_name, spreadsheet_id, sheet_id
 
     headers = []
     data = None
-    filter_criteria = {}
+
     combine_cols = False
     # Fetch data from gsheet
     try:
@@ -159,16 +159,19 @@ def import_from_gsheet_helper(user, silo_id, silo_name, spreadsheet_id, sheet_id
                     "redirect": None})
         return msgs
 
+    unique_fields = silo.unique_fields.all()
     skipped_rows = set()
     for r, row in enumerate(data):
         if r == 0: headers = row; continue;
+        filter_criteria = {}
 
         # build filter_criteria if unique field(s) have been setup for this silo
-        for unique_field in silo.unique_fields.all():
+        for unique_field in unique_fields:
             try:
                 filter_criteria.update({unique_field.name: row[headers.index(unique_field.name)]})
+            except KeyError:
+                pass
             except ValueError:
-                combine_cols = True
                 pass
         if filter_criteria:
             filter_criteria.update({'silo_id': silo.id})
@@ -188,17 +191,21 @@ def import_from_gsheet_helper(user, silo_id, silo_name, spreadsheet_id, sheet_id
             lvs = LabelValueStore()
 
         for c, col in enumerate(row):
-            key = headers[c]
-            if key == "" or key is None or key == "silo_id" or key == "create_date" or key == "edit_date": continue
-            if key == "id" or key == "_id": key = "user_assigned_id"
-            setattr(lvs, key.replace(".", "_"), row[c])
+            try:
+                key = headers[c]
+            except KeyError as e:
+                #this happens when a column header is missing gsheet
+                continue
+            if key == "" or key is None or key == "silo_id": continue
+            elif key == "id" or key == "_id": key = "user_assigned_id"
+            elif key == "edit_date": key = "editted_date"
+            elif key == "create_date": key = "created_date"
+            setattr(lvs, key.replace(".", "_").replace("$", "USD"), row[c])
         lvs.silo_id = silo.id
         lvs.create_date = timezone.now()
         lvs.save()
 
-    # Combine all of the columns
-    if combine_cols:
-        combineColumns(silo.pk)
+    combineColumns(silo.pk)
 
     if skipped_rows:
         msgs.append({"level": messages.WARNING,
@@ -371,6 +378,7 @@ def get_sheets_from_google_spredsheet(request):
     spreadsheet_id = request.GET.get("spreadsheet_id", None)
     credential_obj = get_credential_object(request.user)
     if not isinstance(credential_obj, OAuth2Credentials):
+        request.session['redirect_uri_after_step2'] = request.META.get('HTTP_REFERER')
         return JsonResponse(credential_obj)
 
     service = get_authorized_service(credential_obj)
