@@ -41,7 +41,7 @@ MONGODB_NAME = app_settings['MONGODB_NAME']
 
 # DEBUG CONFIGURATION
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#debug
-#DEBUG = app_settings['DEBUG']
+DEBUG = app_settings['DEBUG']
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#template-debug
 TEMPLATE_DEBUG = app_settings['TEMPLATE_DEBUG']
 
