@@ -230,10 +230,27 @@ class SiloAdmin(admin.ModelAdmin):
     display = 'Data Feeds'
 
 
+class PIIColumn(models.Model):
+    """
+    Personally Identifiable Information Column is a column with data, which
+    can be used to personally identify someone.
+    """
+    owner = models.ForeignKey(User)
+    fieldname = models.CharField(blank=True, null=True, max_length=255)
+    create_date = models.DateTimeField(auto_now_add=False, editable=False)
+
+
 class MergedSilosFieldMapping(models.Model):
+    MERGE = 'merge'
+    APPEND = 'append'
+    MERGE_CHOICES = (
+        (MERGE, 'Merge'),
+        (APPEND, 'Append'),
+    )
     from_silo = models.ForeignKey(Silo, related_name='from_mappings')
     to_silo = models.ForeignKey(Silo, related_name='to_mappings')
     merged_silo = models.OneToOneField(Silo, related_name='merged_silo_mappings')
+    merge_type = models.CharField(max_length=60, choices=MERGE_CHOICES, null=True, blank=True)
     mapping = models.TextField()
     create_date = models.DateTimeField(auto_now=False, auto_now_add=True)
 
