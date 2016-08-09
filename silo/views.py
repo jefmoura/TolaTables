@@ -36,7 +36,7 @@ from .models import GoogleCredentialsModel
 from gviews_v4 import import_from_gsheet_helper
 from tola.util import siloToDict, combineColumns, importJSON, saveDataToSilo, getSiloColumnNames
 
-from .models import Silo, Read, ReadType, ThirdPartyTokens, LabelValueStore, Tag, UniqueFields, MergedSilosFieldMapping, TolaSites
+from .models import Silo, Read, ReadType, ThirdPartyTokens, LabelValueStore, Tag, UniqueFields, MergedSilosFieldMapping, TolaSites, PIIColumn
 from .forms import ReadForm, UploadForm, SiloForm, MongoEditForm, NewColumnForm, EditColumnForm, OnaLoginForm
 
 logger = logging.getLogger("silo")
@@ -685,16 +685,18 @@ def showRead(request, id):
 
     try:
         read_instance = Read.objects.get(pk=id)
-        if read_instance.type.read_type != "CSV":
-            excluded_fields = ('file_data',)
+        read_type = read_instance.type.read_type
     except Read.DoesNotExist as e:
         read_instance = None
         read_type = request.GET.get("type", None)
-        if read_type == None or read_type == "CSV":
-            read_type = "CSV"
-        else:
-            excluded_fields = ('file_data',)
         initial['type'] = ReadType.objects.get(read_type=read_type)
+
+    if read_type == "GSheet Import" or read_type == "ONA" or read_type == "JSON":
+        excluded_fields = ('file_data','autopush_frequency')
+    elif read_type == "Google Spreadsheet":
+        excluded_fields = ('file_data', 'autopull_frequency')
+    elif read_type == "CSV":
+        pass
 
     if request.method == 'POST':
         form = ReadForm(request.POST, request.FILES, instance=read_instance)
@@ -1227,33 +1229,40 @@ def export_silo(request, id):
 
 @login_required
 def anonymizeTable(request, id):
-    silo = Silo.objects.get(pk=id)
-    lvs = db.label_value_store.find({"silo_id": id})
-
+    lvs = db.label_value_store.find({"silo_id": int(id)})
+    piif_cols = PIIColumn.objects.values_list("fieldname",flat=True).order_by('fieldname')
     fields_to_remove = {}
     for row in lvs:
         for k in row:
-            if k in annoymizied_fields_list:
-                fields_to_remove[k] = ""
+            if k in piif_cols:
+                if k == "_id" or k == "silo_id" or k == "create_date" or k == "edit_date": continue
+                fields_to_remove[str(k)] = ""
 
     if fields_to_remove:
-        res = db.label_value_store.update({"silo_id": id}, { "$unset": fields_to_remove})
+        res = db.label_value_store.update_many({"silo_id": int(id)}, { "$unset": fields_to_remove})
+        messages.success(request, "Table has been annonymized! But do review it again.")
     else:
-        messages.info(request, "No personally identifiable fields found!")
+        messages.info(request, "No PIIF columns were found.")
+
     return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'id': id}))
 
 
 @login_required
-def identifyPII(request):
+def identifyPII(request, silo_id):
     """
     Identifying Columns with Personally Identifiable Information (PII)
     """
-    if request.method != 'POST':
-        return HttpResponseBadRequest("HTTP method, %s, is not supported" % request.method)
+    if request.method == 'GET':
+        columns = []
+        lvs = db.label_value_store.find({"silo_id": int(silo_id)})
+        for d in lvs:
+            columns.extend([k for k in d.keys() if k not in columns])
+        return render(request, 'display/annonymize_columns.html', {"silo_id": silo_id, "columns": columns})
 
-    columns = request.POST.getlist("piicolumns")
+    columns = request.POST.getlist("cols[]")
+
     for i, c in enumerate(columns):
-        col, created = PIIColumn.objects.get_or_create(name=c, defaults={'owner': request.user})
+        col, created = PIIColumn.objects.get_or_create(fieldname=c, defaults={'owner': request.user})
 
     return JsonResponse({"status":"success"})
 
