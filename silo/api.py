@@ -15,6 +15,7 @@ from rest_framework import pagination
 
 import django_filters
 
+"""
 def silo_data_api(request, id):
     if id <= 0:
         return HttpResponseBadRequest("The silo_id = %s is invalid" % id)
@@ -22,12 +23,29 @@ def silo_data_api(request, id):
     data = LabelValueStore.objects(silo_id=id).to_json()
     json_data = json.loads(data)
     return JsonResponse(json_data, safe=False)
-
+"""
 
 class UserViewSet(viewsets.ModelViewSet):
     queryset = User.objects.all()
     serializer_class = UserSerializer
 
+class PublicSiloViewSet(viewsets.ReadOnlyModelViewSet):
+    serializer_class = PublicSiloSerializer
+    permission_classes = (permissions.IsAuthenticatedOrReadOnly,
+                          IsOwnerOrReadOnly,)
+    lookup_field = 'id'
+
+    def get_queryset(self):
+        return Silo.objects.filter(public=True)
+
+    @detail_route()
+    def data(self, request, id):
+        if id <= 0:
+            return HttpResponseBadRequest("The silo_id = %s is invalid" % id)
+
+        data = LabelValueStore.objects(silo_id=id).to_json()
+        json_data = json.loads(data)
+        return JsonResponse(json_data, safe=False)
 
 class SiloViewSet(viewsets.ModelViewSet):
     """

@@ -1,6 +1,7 @@
 import datetime
 import json
 import csv
+import base64
 import requests
 from requests.auth import HTTPDigestAuth
 import logging
@@ -36,8 +37,8 @@ from .models import GoogleCredentialsModel
 from gviews_v4 import import_from_gsheet_helper
 from tola.util import siloToDict, combineColumns, importJSON, saveDataToSilo, getSiloColumnNames
 
-from .models import Silo, Read, ReadType, ThirdPartyTokens, LabelValueStore, Tag, UniqueFields, MergedSilosFieldMapping, TolaSites
-from .forms import ReadForm, UploadForm, SiloForm, MongoEditForm, NewColumnForm, EditColumnForm, OnaLoginForm
+from .models import Silo, Read, ReadType, ThirdPartyTokens, LabelValueStore, Tag, UniqueFields, MergedSilosFieldMapping, TolaSites, PIIColumn
+from .forms import get_read_form, UploadForm, SiloForm, MongoEditForm, NewColumnForm, EditColumnForm, OnaLoginForm
 
 logger = logging.getLogger("silo")
 db = MongoClient(settings.MONGODB_HOST).tola
@@ -370,110 +371,6 @@ def appendTwoSilos(mapping_data, lsid, rsid, msid):
     combineColumns(msid)
     return {'status': "success",  'message': "Appended data successfully"}
 
-def appendTwoSilosOLD(data, left_table_id, right_table_id):
-    """
-    mapping_data, lsid, rsid, msid
-    :param data: Mapping of the columns
-    :param left_table_id: Data to merge from
-    :param right_table_id: Data to merge into
-    """
-    columns_mapping = json.loads(data)
-
-    left_unmapped_cols = columns_mapping.pop('left_unmapped_cols')
-    right_unmapped_cols = columns_mapping.pop('right_unmapped_cols')
-
-    merged_data = []
-
-    left_table_data = LabelValueStore.objects(silo_id=left_table_id).to_json()
-    left_table_data_json = json.loads(left_table_data)
-    unique_cols = set()
-    for row in left_table_data_json:
-        merge_data_row = {}
-
-        # Loop through the mapped_columns for each row in left_table.
-        for k, v in columns_mapping.iteritems():
-            merge_type = v['merge_type']
-            left_cols = v['left_table_cols']
-            right_col = v['right_table_col']
-
-            # only the right_col is added to the unique_cols set because the left_columns are mapped to the right_col
-            unique_cols.add(right_col)
-
-            # if merge_type is specified then there must be multiple columns in the left_cols array
-            if merge_type:
-                mapped_value = ''
-                for col in left_cols:
-                    try:
-                        if merge_type == 'Join':
-                            mapped_value += ' ' + str(row[col])
-                        elif merge_type == 'Sum' or merge_type == 'Avg':
-                            try:
-                                if mapped_value == '':
-                                    mapped_value = float(row[col])
-                                else:
-                                    mapped_value = float(mapped_value) + float(row[col])
-                            except Exception as e1:
-                                return {"status": "danger", "message": "The merge-type, %s, requires a numeric value. But the value, %s, is not a numeric value." % (merge_type, mapped_value)}
-                        else:
-                            pass
-                    except Exception as e:
-                        return {'status': "danger",  'message': 'Failed to apply %s to column, %s : %s ' % (merge_type, col, e.message)}
-
-                if merge_type == 'Avg':
-                    mapped_value = mapped_value / len(left_cols)
-
-            # there is only a single column in left_cols array
-            else:
-                col = str(left_cols[0])
-                try:
-                    mapped_value = row[col]
-                except KeyError as e:
-                    # The left table does not have this col anymore; so skip.
-                    continue
-
-            # finally add the mapped_value to the merge_data_row
-            merge_data_row[right_col] = mapped_value
-
-        # Loop through the left_unmapped_columns for each row in left_table.
-        for col in left_unmapped_cols:
-            unique_cols.add(col)
-            if col in row.keys():
-                merge_data_row[col] = row[col]
-            else:
-                merge_data_row[col] = ''
-
-        # Loop through all of the right_unmapped_cols for each row in left_table.
-        for col in right_unmapped_cols:
-            unique_cols.add(col)
-            if col in row.keys():
-                merge_data_row[col] = row[col]
-            else:
-                merge_data_row[col] = ''
-
-        merge_data_row['left_table_id'] = left_table_id
-        merge_data_row['right_table_id'] = right_table_id
-
-        # add the complete row/object to the merged_data array
-        merged_data.append(merge_data_row)
-
-    # Get the right silo and append its data to merged_data array
-    right_table_data = LabelValueStore.objects(silo_id=right_table_id).to_json()
-    right_table_data_json = json.loads(right_table_data)
-    for row in right_table_data_json:
-        merge_data_row = {}
-        for col in unique_cols:
-            #print(row.keys())
-            if col in row.keys():
-                merge_data_row[col] = smart_str(row[col])
-            else:
-                merge_data_row[col] = ''
-
-        merge_data_row['left_table_id'] = left_table_id
-        merge_data_row['right_table_id'] = right_table_id
-        # add the complete row/object to the merged_data array
-        merged_data.append(merge_data_row)
-    return merged_data
-
 
 # Edit existing silo meta data
 @csrf_protect
@@ -680,26 +577,36 @@ def showRead(request, id):
     """
     Show a read data source and allow user to edit it
     """
+    excluded_fields = ['gsheet_id', 'resource_id', 'token', 'create_date', 'edit_date', 'token']
     initial = {'owner': request.user}
-    excluded_fields=('autopush_frequency', 'autopull_frequency', 'read_url')
 
     try:
         read_instance = Read.objects.get(pk=id)
-        if read_instance.type.read_type != "CSV":
-            excluded_fields = ('file_data',)
+        read_type = read_instance.type.read_type
     except Read.DoesNotExist as e:
         read_instance = None
-        read_type = request.GET.get("type", None)
-        if read_type == None or read_type == "CSV":
-            read_type = "CSV"
-        else:
-            excluded_fields = ('file_data',)
+        read_type = request.GET.get("type", "CSV")
         initial['type'] = ReadType.objects.get(read_type=read_type)
 
+
+    if read_type == "GSheet Import" or read_type == "ONA":
+        excluded_fields = excluded_fields + ['username', 'password', 'file_data','autopush_frequency']
+    elif read_type == "JSON":
+        excluded_fields = excluded_fields + ['file_data','autopush_frequency']
+    elif read_type == "Google Spreadsheet":
+        excluded_fields = excluded_fields + ['username', 'password', 'file_data', 'autopull_frequency']
+    elif read_type == "CSV":
+        excluded_fields = excluded_fields + ['username', 'password', 'autopush_frequency', 'autopull_frequency', 'read_url']
+
     if request.method == 'POST':
-        form = ReadForm(request.POST, request.FILES, instance=read_instance)
+        form = get_read_form(excluded_fields)(request.POST, request.FILES, instance=read_instance)
         if form.is_valid():
-            read = form.save()
+            read = form.save(commit=False)
+            if read.username and read.password:
+                basic_auth = base64.encodestring('%s:%s' % (read.username, read.password))[:-1]
+                read.token = basic_auth
+                read.password = None
+            read.save()
             if form.instance.type.read_type == "CSV":
                 return HttpResponseRedirect("/file/" + str(read.id) + "/")
             elif form.instance.type.read_type == "JSON":
@@ -711,7 +618,7 @@ def showRead(request, id):
         else:
             messages.error(request, 'Invalid Form', fail_silently=False)
     else:
-        form = ReadForm(exclude_list=excluded_fields, instance=read_instance, initial=initial)
+        form = get_read_form(excluded_fields)(instance=read_instance, initial=initial)
     return render(request, 'read/read.html', {
         'form': form, 'read_id': id,
     })
@@ -907,45 +814,45 @@ def updateSiloData(request, pk):
     except Silo.DoesNotExist as e:
         messages.error(request,"Table with id=%s does not exist." % pk)
 
-    unique_field_exist = silo.unique_fields.exists()
-    if  unique_field_exist == False:
-        messages.error(request, "To update data in a table, a unique column must be set")
-
-    if silo and unique_field_exist:
+    if silo:
         try:
             merged_silo_mapping = MergedSilosFieldMapping.objects.get(merged_silo = silo.pk)
-        except MergedSilosFieldMapping.DoesNotExist as e:
-            pass
-
-        # if merge mapping exist then it must be a merged silo so re-apply the merge fn.
-        if merged_silo_mapping:
             left_table_id = merged_silo_mapping.from_silo.pk
             right_table_id = merged_silo_mapping.to_silo.pk
             merge_table_id = merged_silo_mapping.merged_silo.pk
             mapping = merged_silo_mapping.mapping
-            res = mergeTwoSilos(mapping, left_table_id, right_table_id, merge_table_id)
+            mergeType = merged_silo_mapping.merge_type
+
+            if mergeType == "merge":
+                res = mergeTwoSilos(mapping, left_table_id, right_table_id, merge_table_id)
+            else:
+                res = appendTwoSilos(mapping, left_table_id, right_table_id, merge_table_id)
             if res['status'] == "success":
                 messages.success(request, res['message'])
             else:
                 messages.error(request, res['message'])
-        else:
-            # It's not merged silo so update data from all of its sources.
-            reads = silo.reads.all()
-            for read in reads:
-                if read.type.read_type == "ONA":
-                    ona_token = ThirdPartyTokens.objects.get(user=silo.owner.pk, name="ONA")
-                    response = requests.get(read.read_url, headers={'Authorization': 'Token %s' % ona_token.token})
-                    data = json.loads(response.content)
-                    res = saveDataToSilo(silo, data)
-                elif read.type.read_type == "CSV":
-                    messages.info(request, "When updating data in a table, its CSV source is ignored.")
-                elif read.type.read_type == "JSON":
-                    result = importJSON(read, request.user, None, None, silo.pk, None)
-                    messages.add_message(request, result[0], result[1])
-                elif read.type.read_type == "GSheet Import":
-                    msgs = import_from_gsheet_helper(request.user, silo.id, None, read.resource_id)
-                    for msg in msgs:
-                        messages.add_message(request, msg.get("level", "warning"), msg.get("msg", None))
+        except MergedSilosFieldMapping.DoesNotExist as e:
+            unique_field_exist = silo.unique_fields.exists()
+            if  unique_field_exist == False:
+                messages.error(request, "To update data in a table, a unique column must be set")
+            else:
+                # It's not merged silo so update data from all of its sources.
+                reads = silo.reads.all()
+                for read in reads:
+                    if read.type.read_type == "ONA":
+                        ona_token = ThirdPartyTokens.objects.get(user=silo.owner.pk, name="ONA")
+                        response = requests.get(read.read_url, headers={'Authorization': 'Token %s' % ona_token.token})
+                        data = json.loads(response.content)
+                        res = saveDataToSilo(silo, data)
+                    elif read.type.read_type == "CSV":
+                        messages.info(request, "When updating data in a table, its CSV source is ignored.")
+                    elif read.type.read_type == "JSON":
+                        result = importJSON(read, request.user, None, None, silo.pk, None)
+                        messages.add_message(request, result[0], result[1])
+                    elif read.type.read_type == "GSheet Import":
+                        msgs = import_from_gsheet_helper(request.user, silo.id, None, read.resource_id)
+                        for msg in msgs:
+                            messages.add_message(request, msg.get("level", "warning"), msg.get("msg", None))
 
     return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'id': pk},))
 
@@ -1081,6 +988,7 @@ def doMerge(request):
     # get the table_ids.
     left_table_id = request.POST['left_table_id']
     right_table_id = request.POST["right_table_id"]
+    mergeType = request.POST.get("tableMergeType", None)
     left_table = None
     right_table = None
 
@@ -1108,7 +1016,10 @@ def doMerge(request):
     new_silo.save()
     merge_table_id = new_silo.pk
 
-    res = mergeTwoSilos(data, left_table_id, right_table_id, merge_table_id)
+    if mergeType == "merge":
+        res = mergeTwoSilos(data, left_table_id, right_table_id, merge_table_id)
+    else:
+        res = appendTwoSilos(data, left_table_id, right_table_id, merge_table_id)
 
     try:
         if res['status'] == "danger":
@@ -1117,7 +1028,7 @@ def doMerge(request):
     except Exception as e:
         pass
 
-    mapping = MergedSilosFieldMapping(from_silo=left_table, to_silo=right_table, merged_silo=new_silo, mapping=data)
+    mapping = MergedSilosFieldMapping(from_silo=left_table, to_silo=right_table, merged_silo=new_silo, merge_type=mergeType, mapping=data)
     mapping.save()
     return JsonResponse({'status': "success",  'message': 'The merged table is accessible at <a href="/silo_detail/%s/" target="_blank">Merged Table</a>' % new_silo.pk})
 
@@ -1186,17 +1097,6 @@ def valueDelete(request,id):
     return HttpResponseRedirect('/silo_detail/%s/' % silo_id)
 
 
-
-def customFeed(request,id):
-    """
-    All tags in use on this system
-    id = Silo
-    """
-    queryset = LabelValueStore.objects.exclude("silo_id").filter(silo_id=id).to_json()
-
-    return render(request, 'feed/json.html', {"jsonData": queryset}, content_type="application/json")
-
-
 def export_silo(request, id):
 
     silo_name = Silo.objects.get(id=id).name
@@ -1231,5 +1131,44 @@ def export_silo(request, id):
                 data[r][cols.index(col)] = smart_str(row[col])
             writer.writerow(data[r])
     return response
+
+@login_required
+def anonymizeTable(request, id):
+    lvs = db.label_value_store.find({"silo_id": int(id)})
+    piif_cols = PIIColumn.objects.values_list("fieldname",flat=True).order_by('fieldname')
+    fields_to_remove = {}
+    for row in lvs:
+        for k in row:
+            if k in piif_cols:
+                if k == "_id" or k == "silo_id" or k == "create_date" or k == "edit_date": continue
+                fields_to_remove[str(k)] = ""
+
+    if fields_to_remove:
+        res = db.label_value_store.update_many({"silo_id": int(id)}, { "$unset": fields_to_remove})
+        messages.success(request, "Table has been annonymized! But do review it again.")
+    else:
+        messages.info(request, "No PIIF columns were found.")
+
+    return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'id': id}))
+
+
+@login_required
+def identifyPII(request, silo_id):
+    """
+    Identifying Columns with Personally Identifiable Information (PII)
+    """
+    if request.method == 'GET':
+        columns = []
+        lvs = db.label_value_store.find({"silo_id": int(silo_id)})
+        for d in lvs:
+            columns.extend([k for k in d.keys() if k not in columns])
+        return render(request, 'display/annonymize_columns.html', {"silo_id": silo_id, "columns": columns})
+
+    columns = request.POST.getlist("cols[]")
+
+    for i, c in enumerate(columns):
+        col, created = PIIColumn.objects.get_or_create(fieldname=c, defaults={'owner': request.user})
+
+    return JsonResponse({"status":"success"})
 
 
