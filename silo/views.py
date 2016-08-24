@@ -1,6 +1,8 @@
 import datetime
+import time
 import json
 import csv
+import base64
 import requests
 from requests.auth import HTTPDigestAuth
 import logging
@@ -370,110 +372,6 @@ def appendTwoSilos(mapping_data, lsid, rsid, msid):
     combineColumns(msid)
     return {'status': "success",  'message': "Appended data successfully"}
 
-def appendTwoSilosOLD(data, left_table_id, right_table_id):
-    """
-    mapping_data, lsid, rsid, msid
-    :param data: Mapping of the columns
-    :param left_table_id: Data to merge from
-    :param right_table_id: Data to merge into
-    """
-    columns_mapping = json.loads(data)
-
-    left_unmapped_cols = columns_mapping.pop('left_unmapped_cols')
-    right_unmapped_cols = columns_mapping.pop('right_unmapped_cols')
-
-    merged_data = []
-
-    left_table_data = LabelValueStore.objects(silo_id=left_table_id).to_json()
-    left_table_data_json = json.loads(left_table_data)
-    unique_cols = set()
-    for row in left_table_data_json:
-        merge_data_row = {}
-
-        # Loop through the mapped_columns for each row in left_table.
-        for k, v in columns_mapping.iteritems():
-            merge_type = v['merge_type']
-            left_cols = v['left_table_cols']
-            right_col = v['right_table_col']
-
-            # only the right_col is added to the unique_cols set because the left_columns are mapped to the right_col
-            unique_cols.add(right_col)
-
-            # if merge_type is specified then there must be multiple columns in the left_cols array
-            if merge_type:
-                mapped_value = ''
-                for col in left_cols:
-                    try:
-                        if merge_type == 'Join':
-                            mapped_value += ' ' + str(row[col])
-                        elif merge_type == 'Sum' or merge_type == 'Avg':
-                            try:
-                                if mapped_value == '':
-                                    mapped_value = float(row[col])
-                                else:
-                                    mapped_value = float(mapped_value) + float(row[col])
-                            except Exception as e1:
-                                return {"status": "danger", "message": "The merge-type, %s, requires a numeric value. But the value, %s, is not a numeric value." % (merge_type, mapped_value)}
-                        else:
-                            pass
-                    except Exception as e:
-                        return {'status': "danger",  'message': 'Failed to apply %s to column, %s : %s ' % (merge_type, col, e.message)}
-
-                if merge_type == 'Avg':
-                    mapped_value = mapped_value / len(left_cols)
-
-            # there is only a single column in left_cols array
-            else:
-                col = str(left_cols[0])
-                try:
-                    mapped_value = row[col]
-                except KeyError as e:
-                    # The left table does not have this col anymore; so skip.
-                    continue
-
-            # finally add the mapped_value to the merge_data_row
-            merge_data_row[right_col] = mapped_value
-
-        # Loop through the left_unmapped_columns for each row in left_table.
-        for col in left_unmapped_cols:
-            unique_cols.add(col)
-            if col in row.keys():
-                merge_data_row[col] = row[col]
-            else:
-                merge_data_row[col] = ''
-
-        # Loop through all of the right_unmapped_cols for each row in left_table.
-        for col in right_unmapped_cols:
-            unique_cols.add(col)
-            if col in row.keys():
-                merge_data_row[col] = row[col]
-            else:
-                merge_data_row[col] = ''
-
-        merge_data_row['left_table_id'] = left_table_id
-        merge_data_row['right_table_id'] = right_table_id
-
-        # add the complete row/object to the merged_data array
-        merged_data.append(merge_data_row)
-
-    # Get the right silo and append its data to merged_data array
-    right_table_data = LabelValueStore.objects(silo_id=right_table_id).to_json()
-    right_table_data_json = json.loads(right_table_data)
-    for row in right_table_data_json:
-        merge_data_row = {}
-        for col in unique_cols:
-            #print(row.keys())
-            if col in row.keys():
-                merge_data_row[col] = smart_str(row[col])
-            else:
-                merge_data_row[col] = ''
-
-        merge_data_row['left_table_id'] = left_table_id
-        merge_data_row['right_table_id'] = right_table_id
-        # add the complete row/object to the merged_data array
-        merged_data.append(merge_data_row)
-    return merged_data
-
 
 # Edit existing silo meta data
 @csrf_protect
@@ -680,7 +578,7 @@ def showRead(request, id):
     """
     Show a read data source and allow user to edit it
     """
-    excluded_fields = ['gsheet_id', 'resource_id', 'username', 'token', 'create_date', 'edit_date', 'token']
+    excluded_fields = ['gsheet_id', 'resource_id', 'token', 'create_date', 'edit_date', 'token']
     initial = {'owner': request.user}
 
     try:
@@ -692,17 +590,24 @@ def showRead(request, id):
         initial['type'] = ReadType.objects.get(read_type=read_type)
 
 
-    if read_type == "GSheet Import" or read_type == "ONA" or read_type == "JSON":
+    if read_type == "GSheet Import" or read_type == "ONA":
+        excluded_fields = excluded_fields + ['username', 'password', 'file_data','autopush_frequency']
+    elif read_type == "JSON":
         excluded_fields = excluded_fields + ['file_data','autopush_frequency']
     elif read_type == "Google Spreadsheet":
-        excluded_fields = excluded_fields + ['file_data', 'autopull_frequency']
+        excluded_fields = excluded_fields + ['username', 'password', 'file_data', 'autopull_frequency']
     elif read_type == "CSV":
-        excluded_fields = excluded_fields + ['autopush_frequency', 'autopull_frequency', 'read_url']
+        excluded_fields = excluded_fields + ['username', 'password', 'autopush_frequency', 'autopull_frequency', 'read_url']
 
     if request.method == 'POST':
         form = get_read_form(excluded_fields)(request.POST, request.FILES, instance=read_instance)
         if form.is_valid():
-            read = form.save()
+            read = form.save(commit=False)
+            if read.username and read.password:
+                basic_auth = base64.encodestring('%s:%s' % (read.username, read.password))[:-1]
+                read.token = basic_auth
+                read.password = None
+            read.save()
             if form.instance.type.read_type == "CSV":
                 return HttpResponseRedirect("/file/" + str(read.id) + "/")
             elif form.instance.type.read_type == "JSON":
@@ -884,7 +789,7 @@ def siloDetail(request,id):
         #cols.extend([k for k in row.keys() if k not in cols and k != '_id' and k != 'silo_id' and k != 'create_date' and k != 'edit_date' and k != 'source_table_id'])
         cols.extend([k for k in row.keys() if k not in cols])
 
-    if silo.owner == owner or silo.public == True or owner__in == silo.shared:
+    if silo.owner == request.user or silo.public == True or owner__in == silo.shared:
         if data and cols:
             silo_table = define_table(cols)(data)
 
@@ -897,8 +802,47 @@ def siloDetail(request,id):
             messages.error(request, "There is not data in Table with id = %s" % id)
             return HttpResponseRedirect(reverse_lazy("listSilos"))
     else:
-        messages.info(request, "You don't have the permission to see data in this table")
+        messages.info(request, "You do not have permissions to view this table.")
         return HttpResponseRedirect(request.META['HTTP_REFERER'])
+
+
+@login_required
+def siloDetail2(request, silo_id):
+    """
+    Silo Detail
+    """
+    silo = Silo.objects.get(pk=silo_id)
+    cols = [""]
+    data = []
+
+    if silo.owner == request.user or silo.public == True or request.user in silo.shared.all():
+        bsondata = store.find({"silo_id": silo.pk})
+        for row in bsondata:
+            # Add a column that contains edit/del links for each row in the table
+            row[cols[0]]=(
+                "<a href='/value_edit/%s'>"
+                    "<span class='glyphicon glyphicon-edit' aria-hidden='true'></span>"
+                "</a>"
+                "&nbsp;"
+                "<a href='/value_delete/%s' class='btn-del' title='You are about to delete a record. Are you sure?'>"
+                    "<span style='color:red;' class='glyphicon glyphicon-trash' aria-hidden='true'></span>"
+                "</a>") % (row["_id"], row['_id'])
+
+            # Using OrderedDict to maintain column orders
+            data.append(OrderedDict(row))
+
+            # create a distinct list of column names to be used for datatables in templates
+            cols.extend([c for c in row.keys() if c not in cols and
+                        c != "_id" and
+                        c != "create_date" and
+                        c != "edit_date" and
+                        c != "silo_id"])
+        # convert bson data to json data using json_utils.dumps from pymongo module
+        data = dumps(data)
+    else:
+        messages.warning(request,"You do not have permission to view this table.")
+    return render(request, "display/silo.html", {"data": data, "silo": silo, "cols": cols})
+
 
 @login_required
 def updateSiloData(request, pk):
@@ -1201,7 +1145,12 @@ def export_silo(request, id):
     response['Content-Disposition'] = 'attachment; filename="%s.csv"' % silo_name
     writer = csv.writer(response)
 
-    silo_data = LabelValueStore.objects(silo_id=id)
+    # Loads the bson objects from mongo
+    bsondata = store.find({"silo_id": int(id)})
+    # Now convert bson to json string using OrderedDict to main fields order
+    json_string = dumps(bsondata)
+    # Now decode the json string into python object
+    silo_data = json.loads(json_string, object_pairs_hook=OrderedDict)
     data = []
     num_cols = 0
     cols = OrderedDict()
@@ -1211,7 +1160,8 @@ def export_silo(request, id):
         for row in silo_data:
             for i, col in enumerate(row):
                 if col not in cols.keys():
-                    num_cols = num_cols + 1
+                    num_cols += 1
+                    col = col.decode("latin-1").encode("utf8")
                     cols[col] = num_cols
 
         # Convert OrderedDict to Python list so that it can be written to CSV writer.
@@ -1224,7 +1174,14 @@ def export_silo(request, id):
         for r, row in enumerate(silo_data):
             for col in row:
                 # Map values to column names and place them in the correct position in the data array
-                data[r][cols.index(col)] = smart_str(row[col])
+                val = row[col]
+                if isinstance(val, OrderedDict): val  = val.popitem()
+                if isinstance(val, tuple):
+                    if val[0] == "$date": val = smart_text(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(val[1]/1000)))
+                    if val[0] == "$oid": val = smart_text(val[1])
+                #val = val.decode("latin-1").encode("utf8")
+                val = smart_text(val).decode("latin-1").encode("utf8")
+                data[r][cols.index(col)] = val
             writer.writerow(data[r])
     return response
 

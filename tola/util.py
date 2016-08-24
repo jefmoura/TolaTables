@@ -6,6 +6,7 @@ import base64
 from django.utils.encoding import smart_text
 from django.utils import timezone
 from django.conf import settings
+from django.utils.encoding import smart_str
 from django.contrib.auth.models import User
 
 from silo.models import Read, Silo, LabelValueStore
@@ -57,6 +58,7 @@ def saveDataToSilo(silo, data):
     """
     unique_fields = silo.unique_fields.all()
     skipped_rows = set()
+    enc = "latin-1"
     for counter, row in enumerate(data):
         # reseting filter_criteria for each row
         filter_criteria = {}
@@ -99,6 +101,8 @@ def saveDataToSilo(silo, data):
             elif key == "id" or key == "_id": key = "user_assigned_id"
             elif key == "edit_date": key = "editted_date"
             elif key == "create_date": key = "created_date"
+            if type(val) == str or type(val) == unicode:
+                val = val.decode(enc).encode("utf8")
             setattr(lvs, key.replace(".", "_").replace("$", "USD"), val)
             counter += 1
         lvs.save()
@@ -116,11 +120,14 @@ def importJSON(read_obj, user, remote_user = None, password = None, silo_id = No
     today = str(today)
     try:
         request2 = urllib2.Request(read_obj.read_url)
-        #if they passed in a usernmae get auth info from form post then encode and add to the request header
-
-        if remote_user and password:
+        # If the read_obj has token then use it; otherwise, check for login info.
+        if read_obj.token:
+            request2.add_header("Authorization", "Basic %s" % read_obj.token)
+        elif remote_user and password:
             base64string = base64.encodestring('%s:%s' % (remote_user, password))[:-1]
             request2.add_header("Authorization", "Basic %s" % base64string)
+        else:
+            pass
         #retrieve JSON data from formhub via auth info
         json_file = urllib2.urlopen(request2)
         silo = None
