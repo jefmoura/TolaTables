@@ -1,4 +1,5 @@
 import datetime
+import time
 import json
 import csv
 import base64
@@ -788,7 +789,7 @@ def siloDetail(request,id):
         #cols.extend([k for k in row.keys() if k not in cols and k != '_id' and k != 'silo_id' and k != 'create_date' and k != 'edit_date' and k != 'source_table_id'])
         cols.extend([k for k in row.keys() if k not in cols])
 
-    if silo.owner == owner or silo.public == True or owner__in == silo.shared:
+    if silo.owner == request.user or silo.public == True or owner__in == silo.shared:
         if data and cols:
             silo_table = define_table(cols)(data)
 
@@ -801,8 +802,47 @@ def siloDetail(request,id):
             messages.error(request, "There is not data in Table with id = %s" % id)
             return HttpResponseRedirect(reverse_lazy("listSilos"))
     else:
-        messages.info(request, "You don't have the permission to see data in this table")
+        messages.info(request, "You do not have permissions to view this table.")
         return HttpResponseRedirect(request.META['HTTP_REFERER'])
+
+
+@login_required
+def siloDetail2(request, silo_id):
+    """
+    Silo Detail
+    """
+    silo = Silo.objects.get(pk=silo_id)
+    cols = [""]
+    data = []
+
+    if silo.owner == request.user or silo.public == True or request.user in silo.shared.all():
+        bsondata = store.find({"silo_id": silo.pk})
+        for row in bsondata:
+            # Add a column that contains edit/del links for each row in the table
+            row[cols[0]]=(
+                "<a href='/value_edit/%s'>"
+                    "<span class='glyphicon glyphicon-edit' aria-hidden='true'></span>"
+                "</a>"
+                "&nbsp;"
+                "<a href='/value_delete/%s' class='btn-del' title='You are about to delete a record. Are you sure?'>"
+                    "<span style='color:red;' class='glyphicon glyphicon-trash' aria-hidden='true'></span>"
+                "</a>") % (row["_id"], row['_id'])
+
+            # Using OrderedDict to maintain column orders
+            data.append(OrderedDict(row))
+
+            # create a distinct list of column names to be used for datatables in templates
+            cols.extend([c for c in row.keys() if c not in cols and
+                        c != "_id" and
+                        c != "create_date" and
+                        c != "edit_date" and
+                        c != "silo_id"])
+        # convert bson data to json data using json_utils.dumps from pymongo module
+        data = dumps(data)
+    else:
+        messages.warning(request,"You do not have permission to view this table.")
+    return render(request, "display/silo.html", {"data": data, "silo": silo, "cols": cols})
+
 
 @login_required
 def updateSiloData(request, pk):
@@ -1105,7 +1145,12 @@ def export_silo(request, id):
     response['Content-Disposition'] = 'attachment; filename="%s.csv"' % silo_name
     writer = csv.writer(response)
 
-    silo_data = LabelValueStore.objects(silo_id=id)
+    # Loads the bson objects from mongo
+    bsondata = store.find({"silo_id": int(id)})
+    # Now convert bson to json string using OrderedDict to main fields order
+    json_string = dumps(bsondata)
+    # Now decode the json string into python object
+    silo_data = json.loads(json_string, object_pairs_hook=OrderedDict)
     data = []
     num_cols = 0
     cols = OrderedDict()
@@ -1115,7 +1160,8 @@ def export_silo(request, id):
         for row in silo_data:
             for i, col in enumerate(row):
                 if col not in cols.keys():
-                    num_cols = num_cols + 1
+                    num_cols += 1
+                    col = col.decode("latin-1").encode("utf8")
                     cols[col] = num_cols
 
         # Convert OrderedDict to Python list so that it can be written to CSV writer.
@@ -1128,7 +1174,14 @@ def export_silo(request, id):
         for r, row in enumerate(silo_data):
             for col in row:
                 # Map values to column names and place them in the correct position in the data array
-                data[r][cols.index(col)] = smart_str(row[col])
+                val = row[col]
+                if isinstance(val, OrderedDict): val  = val.popitem()
+                if isinstance(val, tuple):
+                    if val[0] == "$date": val = smart_text(time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(val[1]/1000)))
+                    if val[0] == "$oid": val = smart_text(val[1])
+                #val = val.decode("latin-1").encode("utf8")
+                val = smart_text(val).decode("latin-1").encode("utf8")
+                data[r][cols.index(col)] = val
             writer.writerow(data[r])
     return response
 
