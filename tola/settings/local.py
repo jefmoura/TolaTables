@@ -37,7 +37,6 @@ DATABASES = app_settings['DATABASES']
 
 # MONGO CONFIGURATION
 MONGODB_HOST = app_settings['MONGODB_HOST']
-MONGODB_NAME = app_settings['MONGODB_NAME']
 
 # DEBUG CONFIGURATION
 # See: https://docs.djangoproject.com/en/dev/ref/settings/#debug

@@ -41,3 +41,4 @@ client_secrets.json
 error.log
 *.secret
 *.secret.yml
+config/
