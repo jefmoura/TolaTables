@@ -767,11 +767,11 @@ def updateEntireColumn(request):
             )
         messages.success(request, "Successfully, changed the %s column value to %s" % (colname, new_val))
 
-    return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'id': silo_id}))
+    return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'silo_id': silo_id}))
 
 #SILO-DETAIL Show data from source
 @login_required
-def siloDetail(request,id):
+def siloDetail_OLD(request,id):
     """
     Show silo source details
     """
@@ -808,12 +808,12 @@ def siloDetail(request,id):
         return HttpResponseRedirect(request.META['HTTP_REFERER'])
 
 @login_required
-def siloDetail2(request, silo_id):
+def siloDetail(request, silo_id):
     """
     Silo Detail
     """
     silo = Silo.objects.get(pk=silo_id)
-    cols = [""]
+    cols = []
     data = []
 
     if silo.owner == request.user or silo.public == True or request.user in silo.shared.all():
@@ -821,6 +821,7 @@ def siloDetail2(request, silo_id):
         #bsondata = db.label_value_store.find({"silo_id": silo.pk})
         for row in bsondata:
             # Add a column that contains edit/del links for each row in the table
+            """
             row[cols[0]]=(
                 "<a href='/value_edit/%s'>"
                     "<span class='glyphicon glyphicon-edit' aria-hidden='true'></span>"
@@ -829,22 +830,23 @@ def siloDetail2(request, silo_id):
                 "<a href='/value_delete/%s' class='btn-del' title='You are about to delete a record. Are you sure?'>"
                     "<span style='color:red;' class='glyphicon glyphicon-trash' aria-hidden='true'></span>"
                 "</a>") % (row["_id"], row['_id'])
-
+            """
             # Using OrderedDict to maintain column orders
             #print(type(row))
             data.append(OrderedDict(row))
 
             # create a distinct list of column names to be used for datatables in templates
             cols.extend([c for c in row.keys() if c not in cols and
-                        c != "_id" and
+                        #c != "_id" and
                         c != "create_date" and
                         c != "edit_date" and
                         c != "silo_id"])
+            break
         # convert bson data to json data using json_utils.dumps from pymongo module
         data = dumps(data)
     else:
         messages.warning(request,"You do not have permission to view this table.")
-    return render(request, "display/silo.html", {"data": data, "silo": silo, "cols": cols})
+    return render(request, "display/silo.html", {"silo": silo, "cols": cols})
 
 
 @login_required
@@ -897,7 +899,7 @@ def updateSiloData(request, pk):
                         for msg in msgs:
                             messages.add_message(request, msg.get("level", "warning"), msg.get("msg", None))
 
-    return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'id': pk},))
+    return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'silo_id': pk},))
 
 
 #Add a new column on to a silo
@@ -1207,7 +1209,7 @@ def anonymizeTable(request, id):
     else:
         messages.info(request, "No PIIF columns were found.")
 
-    return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'id': id}))
+    return HttpResponseRedirect(reverse_lazy('siloDetail', kwargs={'silo_id': id}))
 
 
 @login_required
