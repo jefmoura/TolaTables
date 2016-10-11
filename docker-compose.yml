@@ -1,5 +1,6 @@
 mysqldb:
   image: mysql:5.7
+  restart: always
   env_file: ./config/mysql.env.secret
 nginx:
    image: nginx
@@ -20,6 +21,7 @@ mongodb:
 tola:
    build: .
    command: bash -c 'python manage.py migrate && python manage.py loaddata fixtures/tolasites.json && python manage.py loaddata fixtures/sites.json && python manage.py migrate && python manage.py runserver 0.0.0.0:8000'
+   restart: always
    volumes:
        - .:/code
    expose:
