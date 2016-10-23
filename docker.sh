@@ -7,6 +7,4 @@ git stash
 git pull origin docker
 
 docker-compose build 
-docker-compose up -d mysqldb
-sleep 15
 docker-compose up
