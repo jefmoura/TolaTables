@@ -1,14 +1,17 @@
 mysqldb:
   image: mysql:5.7
   env_file: ./config/mysql.env.secret
+  volumes:
+     - /var/lib/mysql/docker:/var/lib/mysql
+  restart: always
 nginx:
    image: nginx
    restart: always
    volumes:
       - .:/home/TolaTables
       - ./config/nginx.conf:/etc/nginx/conf.d/default.conf
-      - /etc/letsencrypt/live/tables.toladata.io/fullchain.pem:/etc/letsencrypt/live/tables.toladata.io/fullchain.pem
-      - /etc/letsencrypt/live/tables.toladata.io/privkey.pem:/etc/letsencrypt/live/tables.toladata.io/privkey.pem
+      - /etc/letsencrypt/live/tables.toladata.io-0001/fullchain.pem:/etc/letsencrypt/live/tables.toladata.io/fullchain.pem
+      - /etc/letsencrypt/live/tables.toladata.io-0001/privkey.pem:/etc/letsencrypt/live/tables.toladata.io/privkey.pem
    ports:
       - "80:80"
       - "443:443"
@@ -16,6 +19,8 @@ nginx:
       - tola
 mongodb:
    image: mongo
+   volumes:
+     - /var/lib/mongo/data:/data
    restart: always
 tola:
    build: .
